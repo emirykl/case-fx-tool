@@ -1,41 +1,35 @@
-# Case study — Junior Software Engineer at mangolab
+# FX tool
 
-Two small tasks, **about two and a half hours in total.** Please do not spend
-your weekend on this. If you run out of time, stop and write down what you would
-have done next — that answer counts too.
+A small HTTP tool that converts currencies with ECB reference rates from the
+[Frankfurter v1 API](https://frankfurter.dev/v1/). It favors an explicit error
+over a plausible but incorrect financial result.
 
-Use Claude Code, Cursor, Copilot — whatever you normally use. That is how we work
-every day, and we would rather see you use it well than watch you avoid it. The
-only thing we ask is that you know your own code.
+## Run
 
-**Start by clicking "Use this template"** to create your own repository, then
-work there.
+Python 3.9 or newer is required.
 
----
-
-## Part A — build (about 90 minutes)
-
-A small HTTP service — Python + FastAPI preferred, TypeScript is fine — with one
-endpoint an AI agent could call as a tool:
-
-```
-GET /tools/convert?amount=250&from=EUR&to=TRY&date=2026-08-28
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+./run.sh
 ```
 
-It answers using the public [Frankfurter API](https://frankfurter.dev) —
-European Central Bank rates, no API key, no signup.
+The service listens on `PORT` (default `8080`). It reads the upstream root from
+`FX_UPSTREAM_BASE` (default `https://api.frankfurter.dev`), which makes it easy
+to replace Frankfurter with a local fake:
 
-### Three things are fixed, so that we can run every submission the same way
+```bash
+PORT=9000 FX_UPSTREAM_BASE=http://localhost:9001 ./run.sh
+```
 
-| | |
-|---|---|
-| Upstream URL | from the `FX_UPSTREAM_BASE` environment variable, defaulting to `https://api.frankfurter.dev`. **Nothing may hardcode the real host** — we point this at a fake upstream when reviewing. |
-| Port | from the `PORT` environment variable, default `8080` |
-| Scripts | `./run.sh` starts the service, `./test.sh` runs the tests. Both are in this template, unimplemented. |
+## Use
 
-### The response
+```bash
+curl 'http://localhost:8080/tools/convert?amount=250&from=EUR&to=TRY&date=2026-08-28'
+```
 
-On success, 200 with:
+Example response:
 
 ```json
 {
@@ -50,80 +44,72 @@ On success, 200 with:
 }
 ```
 
-`rate_date` is **the date the rate you used actually belongs to.** `asked_date`
-is what the caller asked for. They are not always the same, and that difference
-is the point of this task.
+`from` defaults to `EUR`, `to` defaults to `TRY`, and `date` is optional. With
+no date the service requests Frankfurter's latest published rate and returns
+`asked_date: null`.
 
-On failure, a non-2xx status and:
+### Decisions and edge cases
+
+- **Weekends and ECB holidays:** Frankfurter may answer a dated request with the
+  previous working day's rate. The service uses the response's actual date as
+  `rate_date` and preserves the caller's date as `asked_date`; it never labels
+  an older rate as belonging to the requested date.
+- **Future or malformed dates:** rejected before contacting the upstream.
+- **Dates before the available series:** return `rate_not_available` when the
+  upstream reports no rate. There is no silent fallback to `latest`.
+- **Currencies:** codes must contain exactly three ASCII letters and are
+  normalized to uppercase. Unsupported codes and identical source/target codes
+  are rejected.
+- **Amounts:** required, greater than zero, at most `1000000000000`, and at most
+  two decimal places. Scientific notation, `NaN`, and infinity are rejected.
+- **Precision:** rates and amounts are parsed as decimal values. The rate is not
+  rounded before multiplication; only the final result is rounded to two
+  decimal places with `ROUND_HALF_UP`.
+- **Upstream failures:** connection failures, timeouts, non-JSON bodies, error
+  statuses, mismatched currencies, impossible dates, and malformed rates become
+  explicit non-2xx errors. Upstream bodies and exception details are not exposed.
+- **Caching:** a bounded in-memory LRU cache stores only validated successful
+  quotes by `(from, to, asked_date)`. Amount is not part of the key because the
+  conversion is calculated locally. The cache is per process and resets on
+  restart.
+
+Calculations use Decimal internally; values are converted to JSON numbers only
+at the response boundary to match the endpoint contract.
+
+## Errors
+
+Every error response has the same shape:
 
 ```json
-{ "error": "<short_machine_code>", "message": "<a sentence a person could read>" }
+{"error": "invalid_amount", "message": "Amount must be greater than zero."}
 ```
 
-List your error codes in your README.
+| HTTP | Code | Meaning |
+|---:|---|---|
+| 422 | `invalid_request` | FastAPI could not parse the request structure. |
+| 422 | `invalid_amount` | Amount is missing or violates the amount policy. |
+| 422 | `invalid_currency` | A currency code is not three ASCII letters. |
+| 422 | `unsupported_currency` | Frankfurter does not support a currency. |
+| 422 | `same_currency` | Source and target currencies are identical. |
+| 422 | `invalid_date` | Date is malformed or in the future. |
+| 404 | `rate_not_available` | No rate exists for the pair/date. |
+| 503 | `upstream_timeout` | The provider exceeded the configured timeout. |
+| 503 | `upstream_unavailable` | The provider could not be reached. |
+| 502 | `upstream_error` | The provider returned an HTTP error. |
+| 502 | `invalid_upstream_response` | The provider returned unusable or unsafe data. |
+| 500 | `internal_error` | An unexpected internal failure occurred. |
 
-### The part that matters
+## Test
 
-The caller is a language model talking to a paying customer, so **a wrong number
-is worse than no number.** Decide — and implement — what happens when:
+```bash
+source .venv/bin/activate
+pip install -r requirements-dev.txt
+./test.sh
+```
 
-- the ECB published no rate for the date asked (weekends, holidays);
-- the date is in the future, or before the series starts;
-- the currency code does not exist, or `from` and `to` are the same;
-- the upstream is slow, returns 500, or returns something that is not JSON;
-- `amount` is missing, zero, negative, or has ten decimal places.
+Tests use `httpx.MockTransport`; they never contact the internet. To reproduce
+the review environment:
 
-Your endpoint must never invent a rate, and must never present a rate as
-belonging to a date it does not belong to. Note that the upstream itself tells
-you which date its rates are from — read it. If you choose to answer with an
-earlier published rate, the response has to make that visible, because the model
-has to be able to tell the customer which day the number is from.
-
-### Also required
-
-- **Tests that pass with no network at all** — fake the upstream. We run
-  `./test.sh` with `FX_UPSTREAM_BASE` pointing at a closed port.
-- A README of your own we can follow in under a minute: how to run it, how to
-  run the tests, your error codes, and what your endpoint does in each of the
-  cases above.
-- A repeat of the same question should not re-ask the upstream.
-- `NOTES.md`, one page. The skeleton is in this repo.
-
-### Not required, not scored
-
-Auth, a database, a UI, a Dockerfile, CI, deployment, more endpoints. Adding them
-will not help you; a smaller thing done carefully will.
-
----
-
-## Part B — review (about 45 minutes)
-
-`tool.py` in this repository is a working version of the same service, written
-quickly with an AI assistant. It runs. **Review it as if it were going live
-tomorrow for a customer who pays us.**
-
-Fill in `REVIEW.md`, one page:
-
-- what is wrong, and what it does to a **customer** — not to a linter;
-- how you would verify each finding;
-- your findings **ranked**, and which single one you would fix before shipping
-  tonight.
-
-Fewer findings, ranked and explained, beat a long list. If something looks
-suspicious but is actually fine, saying so is worth as much as finding a real
-defect.
-
----
-
-## Submitting
-
-Reply to our email with a link to your repository. Commit in small steps — the
-history is part of what we read. Five days is plenty; if you need more, just say
-so.
-
-Any question about this brief, ask. An unclear requirement is our fault, not a
-test.
-
----
-
-<sub>mangolab — Mango Yazılım Teknolojileri Ltd. Şti. · [mangolab.ai/careers](https://mangolab.ai/careers)</sub>
+```bash
+FX_UPSTREAM_BASE=http://127.0.0.1:1 ./test.sh
+```
