@@ -21,3 +21,27 @@ def invalid_currency(message: str) -> ServiceError:
 
 def invalid_date(message: str) -> ServiceError:
     return ServiceError(422, "invalid_date", message)
+
+
+def unsupported_currency() -> ServiceError:
+    return ServiceError(
+        422, "unsupported_currency", "One or both currency codes are not supported."
+    )
+
+
+def rate_not_available() -> ServiceError:
+    return ServiceError(
+        404,
+        "rate_not_available",
+        "No exchange rate is available for the requested currencies and date.",
+    )
+
+
+def upstream_error(message: str) -> ServiceError:
+    return ServiceError(502, "upstream_error", message)
+
+
+def invalid_upstream_response(
+    message: str = "The exchange-rate provider returned invalid data.",
+) -> ServiceError:
+    return ServiceError(502, "invalid_upstream_response", message)

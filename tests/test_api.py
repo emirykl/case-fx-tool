@@ -164,6 +164,52 @@ def test_upstream_failures_have_safe_consistent_errors() -> None:
     run(scenario())
 
 
+def test_unknown_currency_is_told_apart_from_a_missing_observation() -> None:
+    """The upstream answers 404 for both, so the service asks which one it was."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/currencies":
+            return httpx.Response(200, json={"EUR": "Euro", "TRY": "Turkish Lira"})
+        return httpx.Response(404, json={"message": "not found"})
+
+    async def scenario() -> None:
+        async with api_client(handler) as client:
+            unknown = await client.get("/tools/convert?amount=1&to=ZZZ")
+            missing = await client.get("/tools/convert?amount=1&date=1998-01-01")
+        assert unknown.status_code == 422
+        assert unknown.json()["error"] == "unsupported_currency"
+        assert missing.status_code == 404
+        assert missing.json()["error"] == "rate_not_available"
+
+    run(scenario())
+
+
+def test_an_unusable_currency_list_never_upgrades_the_error() -> None:
+    """An empty or broken list must not mark every currency as unsupported."""
+    unusable = [
+        httpx.Response(500, text="down"),
+        httpx.Response(200, text="<html>bad</html>"),
+        httpx.Response(200, json={}),
+        httpx.Response(200, json=["EUR", "TRY"]),
+    ]
+
+    async def scenario() -> None:
+        for currencies in unusable:
+            def handler(
+                request: httpx.Request, value=currencies
+            ) -> httpx.Response:
+                if request.url.path == "/v1/currencies":
+                    return value
+                return httpx.Response(404, json={"message": "not found"})
+
+            async with api_client(handler) as client:
+                response = await client.get("/tools/convert?amount=1&to=ZZZ")
+            assert response.status_code == 404
+            assert response.json()["error"] == "rate_not_available"
+
+    run(scenario())
+
+
 def test_timeout_and_connection_errors_are_distinct() -> None:
     errors = [
         (httpx.ReadTimeout("slow"), "upstream_timeout"),
