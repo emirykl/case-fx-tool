@@ -210,6 +210,25 @@ def test_an_unusable_currency_list_never_upgrades_the_error() -> None:
     run(scenario())
 
 
+def test_routing_errors_use_the_same_envelope() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        raise AssertionError("upstream must not be called")
+
+    async def scenario() -> None:
+        async with api_client(handler) as client:
+            missing_path = await client.get("/nope")
+            wrong_method = await client.post("/tools/convert")
+        assert missing_path.status_code == 404
+        assert missing_path.json() == {
+            "error": "not_found",
+            "message": "The requested endpoint does not exist.",
+        }
+        assert wrong_method.status_code == 405
+        assert wrong_method.json()["error"] == "method_not_allowed"
+
+    run(scenario())
+
+
 def test_timeout_and_connection_errors_are_distinct() -> None:
     errors = [
         (httpx.ReadTimeout("slow"), "upstream_timeout"),

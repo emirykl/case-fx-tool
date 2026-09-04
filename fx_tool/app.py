@@ -9,6 +9,7 @@ import httpx
 from fastapi import FastAPI, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .client import FrankfurterClient
 from .errors import ServiceError
@@ -24,6 +25,14 @@ from .validation import (
 
 logger = logging.getLogger(__name__)
 DEFAULT_UPSTREAM_BASE = "https://api.frankfurter.dev"
+
+# Routing errors are answered in the same envelope as everything else, so a
+# caller never has to parse two different error shapes. The framework's own
+# detail text is replaced rather than forwarded.
+ROUTING_ERRORS = {
+    404: ("not_found", "The requested endpoint does not exist."),
+    405: ("method_not_allowed", "The requested method is not allowed here."),
+}
 
 
 def error_response(error: ServiceError) -> JSONResponse:
@@ -66,6 +75,15 @@ def create_app(http_client: Optional[httpx.AsyncClient] = None) -> FastAPI:
         return error_response(
             ServiceError(422, "invalid_request", "The request parameters are invalid.")
         )
+
+    @app.exception_handler(StarletteHTTPException)
+    async def handle_routing_error(
+        _request: Request, exc: StarletteHTTPException
+    ) -> JSONResponse:
+        code, message = ROUTING_ERRORS.get(
+            exc.status_code, ("request_failed", "The request could not be handled.")
+        )
+        return error_response(ServiceError(exc.status_code, code, message))
 
     @app.exception_handler(Exception)
     async def handle_unexpected_error(_request: Request, exc: Exception) -> JSONResponse:
