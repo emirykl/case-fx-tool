@@ -2,7 +2,23 @@
 
 Findings are ranked by customer harm, not style severity.
 
-## 1. The cache can return a real rate for the wrong date
+## 1. `from` and `date` are silently ignored on every request
+
+The endpoint declares `from_` and `on`, so the documented call
+`?amount=250&from=USD&to=EUR&date=2026-08-28` never reaches the parameters it
+was meant to. `from` falls back to its `EUR` default and `date` is dropped, so
+the service converts the wrong currency using today's rate — and labels it with
+the requested date. Nothing in the response reveals the substitution: the status
+is 200 and the number is plausible. A customer asking to convert dollars is
+quoted euros.
+
+**Verify:** call `?amount=250&from=USD&to=EUR&date=2026-08-28` and read
+`from` in the response; it comes back `EUR`. `GET /openapi.json` confirms the
+parameter names as `amount, from_, to, on`. The fix is
+`Query(alias="from")` and `Query(alias="date")`, plus a test that asserts the
+upstream was called with the currency the caller actually asked for.
+
+## 2. The cache can return a real rate for the wrong date
 
 The cache key is only `base-target`, so the first rate fetched for a currency
 pair is reused for every historical and latest request. Worse, the cached path
@@ -15,7 +31,7 @@ both dates in sequence, and assert the second response has its own rate and the
 upstream's actual date. The current implementation returns the first rate and
 labels it as the second date.
 
-## 2. Failures become HTTP 200 responses containing a zero exchange rate
+## 3. Failures become HTTP 200 responses containing a zero exchange rate
 
 A broad `except Exception` converts timeouts, 500s, invalid JSON, programming
 errors, and missing currencies into a normal-looking response with `rate: 0.0`.
@@ -26,7 +42,7 @@ may tell a paying customer that their money is worth zero.
 HTML. Each request currently returns 200 and a zero result instead of a stable
 non-2xx error.
 
-## 3. The fallback and returned date hide which observation was used
+## 4. The fallback and returned date hide which observation was used
 
 When a requested date has no target rate, the code silently requests `latest`.
 It then returns `str(on or date.today())`, never the upstream payload's `date`.
@@ -38,7 +54,7 @@ return a known older/different `date`. Assert `rate_date` equals that payload
 date and `asked_date` remains the requested date. The current response reports
 the requested date and has no `asked_date` field.
 
-## 4. Rounding the rate before multiplication changes customer totals
+## 5. Rounding the rate before multiplication changes customer totals
 
 The code rounds the exchange rate to two decimals before multiplying. FX rates
 often need four or more decimal places; at larger amounts this creates material
@@ -51,10 +67,13 @@ result rounded.
 
 ## The one I would fix before shipping tonight
 
-I would fix finding 1 first and store `(rate, actual_rate_date)` under a key that
-includes base, target, and requested date. It directly prevents silent,
-plausible financial misinformation. Before releasing the same change, I would
-also make cache insertion conditional on a fully validated upstream response.
+Finding 1, the two aliases. It is the smallest change in the file and the only
+defect that corrupts every single request made through the documented contract —
+including the example in our own docs — while looking completely healthy from
+the outside. Finding 2 is the one I would fix immediately after: store
+`(rate, actual_rate_date)` under a key that includes base, target and requested
+date, and only insert into the cache after the upstream response is fully
+validated.
 
 ## Things that look suspicious but are fine
 
