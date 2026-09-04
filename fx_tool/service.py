@@ -61,4 +61,3 @@ class ConversionService:
             asked_date=requested_date,
             source="ECB via frankfurter.dev",
         )
-

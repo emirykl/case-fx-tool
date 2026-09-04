@@ -105,4 +105,3 @@ def create_app(http_client: Optional[httpx.AsyncClient] = None) -> FastAPI:
 
 
 app = create_app()
-

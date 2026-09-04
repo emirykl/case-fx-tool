@@ -57,4 +57,3 @@ def validate_pair(base: str, target: str) -> None:
             "same_currency",
             "Source and target currencies must be different.",
         )
-

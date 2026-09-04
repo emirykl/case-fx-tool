@@ -21,4 +21,3 @@ def invalid_currency(message: str) -> ServiceError:
 
 def invalid_date(message: str) -> ServiceError:
     return ServiceError(422, "invalid_date", message)
-

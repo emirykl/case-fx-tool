@@ -89,4 +89,3 @@ class FrankfurterClient:
                 "The exchange-rate provider returned a rate from a later date.",
             )
         return RateQuote(rate=rate, rate_date=rate_date)
-
